@@ -4,13 +4,10 @@ export const SuperAdminguard = (req, res, next) => {
   try {
     const user = req?.user;
     if (!user || user.role != "superadmin") {
-      return res.status(403).json({
-        statusCode: 403,
-        message: "Forbidden user",
-      });
+      catchError(res, 403, "Forbidden user");
     }
     next();
   } catch (error) {
-    catchError(error, res);
+    catchError(res, 500, error.message);
   }
 };

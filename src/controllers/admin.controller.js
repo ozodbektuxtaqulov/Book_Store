@@ -2,6 +2,8 @@ import Admin from "../models/admin.model.js";
 import { adminValidator } from "../utils/admin.validate.js";
 import { catchError } from "../utils/error-response.js";
 import { decode, encode } from "../utils/bcrypt-encrypt.js";
+import jwt from "jsonwebtoken";
+import { transporter } from "../utils/mailer.js";
 import {
   generateAccessToken,
   generateRefreshToken,
@@ -12,18 +14,15 @@ export class AdminController {
     try {
       const { error, value } = adminValidator(req.body);
       if (error) {
-        throw new Error(`Error on creating super admin: ${error}`);
+        catchError(res, 400, error);
       }
       const { username, password } = value;
       const checkSuperAdmin = await Admin.findOne({ role: "superadmin" });
       if (checkSuperAdmin) {
-        return res.status(409).json({
-          statusCode: 409,
-          message: "Super admin already exists",
-        });
+        catchError(res, 409, " Super admin already exists");
       }
       const hashedPassword = await decode(password, 7);
-      const newAdmin = await Admin.create({
+      const superadmin = await Admin.create({
         username,
         hashedPassword,
         role: "superadmin",
@@ -32,10 +31,10 @@ export class AdminController {
       return res.status(201).json({
         statusCode: 201,
         message: "success",
-        data: newAdmin,
+        data: superadmin,
       });
     } catch (error) {
-      catchError(error, res);
+      catchError(res, 500, error.message);
     }
   }
 
@@ -43,13 +42,11 @@ export class AdminController {
     try {
       const { error, value } = adminValidator(req.body);
       if (error) {
-        throw new Error(`Error on creating admin: ${error}`);
+        catchError(res, 400, error);
       }
       const { username, password } = value;
-
       const hashedPassword = await decode(password, 7);
-      console.log("Hashed password:", hashedPassword);
-      const newAdmin = await Admin.create({
+      const admin = await Admin.create({
         username,
         hashedPassword,
         role: "admin",
@@ -58,10 +55,102 @@ export class AdminController {
       return res.status(201).json({
         statusCode: 201,
         message: "success",
-        data: newAdmin,
+        data: admin,
       });
     } catch (error) {
-      catchError(error, res);
+      catchError(res, 500, error.message);
+    }
+  }
+
+  async signInAdmin(req, res) {
+    try {
+      const { username, password } = req.body;
+      const admin = await Admin.findOne({ username });
+      if (!admin) {
+        catchError(res, 404, "Admin not found");
+      }
+      const isMatchPassword = await encode(password, admin.hashedPassword);
+      if (!isMatchPassword) {
+        catchError(res, 400, "Invalid password");
+      }
+      const payload = { id: admin._id, role: admin.role };
+      const accessToken = generateAccessToken(payload);
+      const refreshToken = generateRefreshToken(payload);
+      res.cookie("refreshToken", refreshToken, {
+        httpOnly: true,
+        secure: true,
+        maxAge: 30 * 24 * 60 * 60 * 1000,
+      });
+      const mailMessage = {
+        from: process.env.SMTP_USER,
+        to: "ozodbektuxtaqulov@gmail.com",
+        subject: "Full stack N20",
+        text: "Danggg",
+      };
+      transporter.sendMail(mailMessage, function (err, info) {
+        if (err) {
+          console.log(err);
+          catchError(res, 400, `Error on sending to mail: ${err}`);
+        } else {
+          console.log(info);
+        }
+      });
+      return res.status(200).json({
+        statusCode: 200,
+        message: "success",
+        data: accessToken,
+      });
+    } catch (error) {
+      catchError(res, 500, error.message);
+    }
+  }
+
+  async signoutAdmin(req, res) {
+    try {
+      const refreshToken = req.cookies.refreshToken;
+      if (!refreshToken) {
+        catchError(res, 401, "Refresh token not found");
+      }
+      const decodedToken = jwt.verify(
+        refreshToken,
+        process.env.REFRESH_TOKEN_KEY
+      );
+      if (!decodedToken) {
+        catchError(err, 401, "Refresh token expired");
+      }
+      res.clearCookie("refreshToken");
+      return res.status(200).json({
+        statusCode: 200,
+        message: "success",
+        data: {},
+      });
+    } catch (error) {
+      catchError(res, 500, error.message);
+    }
+  }
+
+  async accessToken(req, res) {
+    try {
+      const refreshToken = req.cookies.refreshToken;
+      if (!refreshToken) {
+        catchError(res, 401, "Refresh token not found");
+      }
+      const decodedToken = jwt.verify(
+        refreshToken,
+        process.env.REFRESH_TOKEN_KEY
+      );
+      if (!decodedToken) {
+        catchError(err, 401, "Refresh token expired");
+      }
+      const payload = { id: decodedToken.id, role: decodedToken.role };
+      const accessToken = generateAccessToken(payload);
+      return res.status(200).json({
+        statusCode: 200,
+        message: "success",
+        data: accessToken,
+      });
+    } catch (error) {
+      catchError(res, 500, error.message);
     }
   }
 
@@ -74,34 +163,26 @@ export class AdminController {
         data: admins,
       });
     } catch (error) {
-      catchError(error, res);
+      catchError(res, 500, error.message);
     }
   }
 
   async getAdminById(req, res) {
     try {
-      const id = req.params.id;
-      const admin = await Admin.findById(id);
-      if (!admin) {
-        throw new Error("Admin not found");
-      }
+      const admin = await AdminController.findById(req.params.id);
       return res.status(200).json({
         statusCode: 200,
         message: "success",
         data: admin,
       });
     } catch (error) {
-      catchError(error, res);
+      catchError(res, 500, error.message);
     }
   }
 
   async updateAdminById(req, res) {
     try {
-      const id = req.params.id;
-      const admin = await Admin.findById(id);
-      if (!admin) {
-        throw new Error("Admin not found");
-      }
+      await this.findById(req.params.id);
       const updatedAdmin = await Admin.findByIdAndUpdate(id, res.body, {
         new: true,
       });
@@ -111,22 +192,15 @@ export class AdminController {
         data: updatedAdmin,
       });
     } catch (error) {
-      catchError(error, res);
+      catchError(res, 500, error.message);
     }
   }
 
   async deleteAdminById(req, res) {
     try {
-      const id = req.params.id;
-      const admin = await Admin.findById(id);
-      if (!admin) {
-        throw new Error("Admin not found");
-      }
+      const admin = await this.findById(req.params.id);
       if (admin.role === "superadmin") {
-        return res.status(400).json({
-          statusCode: 400,
-          message: "Danggg",
-        });
+        catchError(res, 400, `Dang\n Super admin cannot be delete`);
       }
       await Admin.findByIdAndDelete(id);
       return res.status(200).json({
@@ -135,35 +209,19 @@ export class AdminController {
         data: {},
       });
     } catch (error) {
-      catchError(error, res);
+      catchError(res, 500, error.message);
     }
   }
 
-  async signInAdmin(req, res) {
+  static async findById(id) {
     try {
-      const { username, password } = req.body;
-      const admin = await Admin.findOne({ username });
+      const admin = await Admin.findById(id);
       if (!admin) {
-        throw new Error("Admin not found");
+        catchError(res, 404, `Admin not found By ${id}`);
       }
-      const isMatchPassword = await encode(password, admin.hashedPassword);
-      if (!isMatchPassword) {
-        throw new Error("Invalid password");
-      }
-      const payload = { id: admin._id, role: admin.role };
-
-      const accessToken = generateAccessToken(payload);
-      const refreshToken = generateRefreshToken(payload);
-      return res.status(200).json({
-        statusCode: 200,
-        message: "success",
-        data: {
-          accessToken,
-          refreshToken,
-        },
-      });
+      return admin;
     } catch (error) {
-      catchError(error, res);
+      catchError(res, 500, error.message);
     }
   }
 }
